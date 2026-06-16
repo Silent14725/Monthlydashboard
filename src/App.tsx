@@ -13,6 +13,12 @@ import { ChevronLeft, ChevronRight, Database, LayoutDashboard, ChevronsLeftRight
 const SLIDE_W = 1280;
 const SLIDE_H = 720;
 
+// Fixed chrome heights — must match the actual rendered heights below
+const NAV_H   = 38;
+const TABS_H  = 28;
+const FOOT_H  = 36;
+const CHROME_H = NAV_H + TABS_H + FOOT_H;
+
 type AppView = 'dashboard' | 'data';
 
 function Dashboard() {
@@ -21,6 +27,7 @@ function Dashboard() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [appView, setAppView] = useState<AppView>('dashboard');
   const [scale, setScale] = useState(1);
+  // viewerRef kept only for export compatibility — scale now derived from window dimensions
   const viewerRef = useRef<HTMLDivElement>(null);
 
   const SLIDES = useMemo(() => [
@@ -33,25 +40,19 @@ function Dashboard() {
     { id: 'slide-thankyou', label: 'Thank You' },
   ], [data.locations]);
 
+  // Compute scale from window dimensions — avoids getBoundingClientRect() misreads on flex containers
   const updateScale = useCallback(() => {
-    if (!viewerRef.current) return;
-    const { width, height } = viewerRef.current.getBoundingClientRect();
-    // Use virtually the full viewer area — 4px total safety margin prevents any subpixel clipping
-    const scaleX = (width - 4) / SLIDE_W;
-    const scaleY = (height - 4) / SLIDE_H;
+    const availW = window.innerWidth;
+    const availH = window.innerHeight - CHROME_H;
+    const scaleX = (availW - 4) / SLIDE_W;
+    const scaleY = (availH - 4) / SLIDE_H;
     setScale(Math.min(scaleX, scaleY));
   }, []);
 
   useEffect(() => {
     updateScale();
-    const ro = new ResizeObserver(updateScale);
-    if (viewerRef.current) ro.observe(viewerRef.current);
-    // Recalculate after fonts and images finish loading — avoids wrong initial scale
-    window.addEventListener('load', updateScale);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('load', updateScale);
-    };
+    window.addEventListener('resize', updateScale);
+    return () => window.removeEventListener('resize', updateScale);
   }, [updateScale]);
 
   // Clamp slide index when locations change
