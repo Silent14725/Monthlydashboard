@@ -6,43 +6,103 @@ interface Props {
   months: (Month | Quarter)[];
 }
 
+const ROW_MIN_HEIGHT = 22;
+
 export function CustomerFleetTable({ data, months }: Props) {
   return (
     <div>
-      <table className="w-full text-xs border-collapse">
-        <thead>
-          <tr>
-            <th
-              className="text-left py-0.5 pr-2 font-bold text-xs"
-              style={{ color: '#555' }}
+      <div
+        className="text-left font-bold text-xs mb-1"
+        style={{ color: '#555' }}
+      >
+        Customer Fleet
+      </div>
+      <div className="w-full">
+        {/* Header row */}
+        <div
+          className="grid items-center"
+          style={{
+            gridTemplateColumns: `1.3fr repeat(${months.length}, 1fr)`,
+            minHeight: `${ROW_MIN_HEIGHT}px`,
+          }}
+        >
+          <div style={{ fontSize: '10px', color: '#555', fontWeight: 700, padding: '0 8px' }} />
+          {months.map((m) => (
+            <div
+              key={m}
+              style={{
+                fontSize: '10px',
+                color: '#555',
+                fontWeight: 700,
+                textAlign: 'center',
+                textTransform: 'uppercase',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                minHeight: `${ROW_MIN_HEIGHT}px`,
+                lineHeight: 1,
+              }}
             >
-              Customer Fleet
-            </th>
-            {months.map((m) => (
-              <th key={m} className="text-center py-0.5 font-bold text-xs" style={{ color: '#555' }}>
-                {m}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row, i) => (
-            <tr key={i} className="border-b border-gray-100">
-              <td className="py-0.5 pr-2 font-semibold" style={{ color: '#333', fontSize: '11px' }}>
-                {row.customer}
-              </td>
-              {months.map((m) => {
-                const val = row[m.toLowerCase() as keyof FleetEntry];
-                return (
-                  <td key={m} className="text-center py-0.5 font-bold" style={{ fontSize: '11px' }}>
-                    {fmtNum(val as number | null)}
-                  </td>
-                );
-              })}
-            </tr>
+              {m}
+            </div>
           ))}
-        </tbody>
-      </table>
+        </div>
+        {/* Data rows */}
+        {data.map((row, i) => (
+          <div
+            key={i}
+            className="grid items-stretch"
+            style={{
+              gridTemplateColumns: `1.3fr repeat(${months.length}, 1fr)`,
+              minHeight: `${ROW_MIN_HEIGHT}px`,
+            }}
+          >
+            <div
+              style={{
+                fontSize: '11px',
+                color: '#333',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                height: '100%',
+                minHeight: `${ROW_MIN_HEIGHT}px`,
+                padding: '0 8px',
+                lineHeight: 1,
+                boxSizing: 'border-box',
+                overflow: 'hidden',
+              }}
+            >
+              {row.customer}
+            </div>
+            {months.map((m) => {
+              const val = row[m.toLowerCase() as keyof FleetEntry];
+              return (
+                <div
+                  key={m}
+                  style={{
+                    fontSize: '11px',
+                    color: '#1a1a1a',
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    height: '100%',
+                    minHeight: `${ROW_MIN_HEIGHT}px`,
+                    padding: '0 4px',
+                    lineHeight: 1,
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {fmtNum(val as number | null)}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

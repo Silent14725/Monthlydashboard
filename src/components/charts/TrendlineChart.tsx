@@ -28,8 +28,9 @@ const CustomLabel = (props: any) => {
   if (index === 0) anchor = 'start';
   else if (index === total - 1) anchor = 'end';
   else anchor = 'middle';
+  // y - 8 keeps the label above the dot with a safe gap; no negative x offsets
   return (
-    <text x={x} y={y - 7} fill="#333" textAnchor={anchor} fontSize={8.5} fontWeight="600">
+    <text x={x} y={y - 8} fill="#333" textAnchor={anchor} fontSize={8.5} fontWeight="600">
       {formatVal(value)}
     </text>
   );
@@ -47,19 +48,25 @@ export function TrendlineChart({ data, title, color = '#66003C' }: Props) {
       <p className="font-semibold mb-0" style={{ color: '#555', fontSize: '9px' }}>
         Monthly Trendline - {title}
       </p>
-      {/* Outer wrapper: overflow visible so labels aren't clipped by the container */}
+      {/* overflow: visible so labels above the line aren't clipped */}
       <div style={{ overflow: 'visible', width: '100%' }}>
-        <ResponsiveContainer width="100%" height={68}>
-          <LineChart data={chartData} margin={{ top: 14, right: 28, left: 28, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={72}>
+          <LineChart
+            data={chartData}
+            // top: 18 gives room for labels above the highest point
+            // left/right: 30 keeps first/last labels inside the card
+            margin={{ top: 18, right: 30, left: 30, bottom: 0 }}
+          >
             <XAxis
               dataKey="month"
               tick={{ fontSize: 8, fill: '#555', fontWeight: 600 }}
               axisLine={false}
               tickLine={false}
+              padding={{ left: 8, right: 8 }}
             />
             <YAxis hide domain={allZero ? [0, 1] : ['auto', 'auto']} />
             <Tooltip
-              formatter={(val: number) => [formatVal(val), title]}
+              formatter={(val: any) => [formatVal(Number(val)), title]}
               contentStyle={{ fontSize: 9, padding: '2px 6px' }}
             />
             <Line
