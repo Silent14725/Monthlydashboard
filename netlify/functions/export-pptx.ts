@@ -1,13 +1,22 @@
-import { handleExportRequest } from '../../api/export-pptx-core';
+import { handleExportRequest, checkBrowser } from '../../api/export-pptx-core';
 
 // Node.js runtime — NOT Edge. Playwright requires a full Node process.
 // Handler typed loosely to avoid @netlify/functions union inference issues.
 export const handler = async (event: any): Promise<any> => {
+  // Preflight check
+  if (event.httpMethod === 'GET') {
+    const result = await checkBrowser();
+    return {
+      statusCode: result.ok ? 200 : 503,
+      body: JSON.stringify(result),
+    };
+  }
+
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
       body: JSON.stringify({ error: 'Method not allowed' }),
-      headers: { Allow: 'POST' },
+      headers: { Allow: 'POST, GET' },
     };
   }
 
@@ -28,8 +37,11 @@ export const handler = async (event: any): Promise<any> => {
   } catch (e: any) {
     console.error('[export-pptx] Error:', e);
     return {
-      statusCode: 500,
-      body: JSON.stringify({ error: e?.message ?? 'Internal server error' }),
+      statusCode: 503,
+      body: JSON.stringify({
+        error: e?.message ?? 'Internal server error',
+        browserError: e?.name === 'BrowserLaunchError',
+      }),
     };
   }
 };

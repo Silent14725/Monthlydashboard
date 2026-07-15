@@ -23,6 +23,36 @@ const SCREENSHOT_TIMEOUT = 30000;
 const READY_TIMEOUT = 30000;
 
 /**
+ * Error thrown when the browser cannot be launched. The client checks for
+ * this class (via the `browserError` property in the JSON response) to show
+ * a targeted message rather than the raw Playwright stack trace.
+ */
+export class BrowserLaunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrowserLaunchError';
+  }
+}
+
+function isBrowserMissingError(e: any): boolean {
+  const msg = (e?.message ?? '').toLowerCase();
+  return (
+    msg.includes('looks like playwright was just installed') ||
+    msg.includes('executable doesn\'t exist') ||
+    msg.includes('executable does not exist') ||
+    msg.includes('browser was not found') ||
+    msg.includes('playwright install')
+  );
+}
+
+function cleanBrowserError(e: any): string {
+  if (isBrowserMissingError(e)) {
+    return 'Chromium browser is not installed. Run "npx playwright install chromium" on the server, then restart.';
+  }
+  return `Failed to launch browser: ${e?.message ?? 'Unknown error'}`;
+}
+
+/**
  * Launch a browser. In local dev, Playwright's bundled Chromium is used.
  * In production, set BROWSER_WS_ENDPOINT to connect to a remote Chromium
  * (e.g. Browserless, Chrome for Testing on a VM, etc.).
@@ -34,7 +64,11 @@ export async function launchBrowser(): Promise<Browser> {
   const { chromium } = await import('playwright');
   const wsEndpoint = process.env.BROWSER_WS_ENDPOINT;
   if (wsEndpoint) {
-    return chromium.connectOverCDP(wsEndpoint);
+    try {
+      return await chromium.connectOverCDP(wsEndpoint);
+    } catch (e: any) {
+      throw new BrowserLaunchError(`Cannot connect to remote browser at ${wsEndpoint}: ${e.message}`);
+    }
   }
 
   const launchOptions: Parameters<typeof chromium.launch>[0] = {
@@ -48,23 +82,21 @@ export async function launchBrowser(): Promise<Browser> {
     ],
   };
 
-  // Use system Chromium if the Playwright-bundled browser is not available
-  if (!process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD) {
-    try {
-      const fs = await import('fs');
-      const localBrowserPath = `${process.cwd()}/node_modules/playwright-core/.local-browsers`;
-      if (fs.existsSync(localBrowserPath)) {
-        const dirs = fs.readdirSync(localBrowserPath);
-        const chromiumDir = dirs.find((d) => d.startsWith('chromium-'));
-        if (chromiumDir) {
-          const execPath = `${localBrowserPath}/${chromiumDir}/chrome-linux64/chrome`;
-          if (fs.existsSync(execPath)) {
-            launchOptions.executablePath = execPath;
-          }
+  // Use Playwright-bundled Chromium if it exists
+  try {
+    const fs = await import('fs');
+    const localBrowserPath = `${process.cwd()}/node_modules/playwright-core/.local-browsers`;
+    if (fs.existsSync(localBrowserPath)) {
+      const dirs = fs.readdirSync(localBrowserPath);
+      const chromiumDir = dirs.find((d) => d.startsWith('chromium-'));
+      if (chromiumDir) {
+        const execPath = `${localBrowserPath}/${chromiumDir}/chrome-linux64/chrome`;
+        if (fs.existsSync(execPath)) {
+          launchOptions.executablePath = execPath;
         }
       }
-    } catch { /* ignore — fall through to system chromium */ }
-  }
+    }
+  } catch { /* ignore — fall through to system chromium */ }
 
   // Fallback to system Chromium if no bundled browser found
   if (!launchOptions.executablePath) {
@@ -77,7 +109,29 @@ export async function launchBrowser(): Promise<Browser> {
     }
   }
 
-  return chromium.launch(launchOptions);
+  try {
+    return await chromium.launch(launchOptions);
+  } catch (e: any) {
+    throw new BrowserLaunchError(cleanBrowserError(e));
+  }
+}
+
+/**
+ * Preflight check: launch a browser, open about:blank, close it.
+ * Returns { ok: true } or { ok: false, error: string }.
+ * Used by the client to decide whether to enable the Export PPTX button.
+ */
+export async function checkBrowser(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const browser = await launchBrowser();
+    const page = await browser.newPage();
+    await page.goto('about:blank');
+    await page.close();
+    await browser.close();
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e instanceof BrowserLaunchError ? e.message : cleanBrowserError(e) };
+  }
 }
 
 /**

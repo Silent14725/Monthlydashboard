@@ -1,7 +1,7 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import pptxgen from 'pptxgenjs';
-import { FileImage, Presentation, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { FileImage, Presentation, FileText, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { CoverPage } from '../../pages/CoverPage';
 import { OverallSummaryPage } from '../../pages/OverallSummaryPage';
@@ -82,6 +82,8 @@ async function captureSlideElement(el: HTMLElement): Promise<string | null> {
   }
 }
 
+type BrowserStatus = 'checking' | 'available' | 'unavailable';
+
 interface Props {
   activeSlide: string;
 }
@@ -91,6 +93,31 @@ export function ExportButtons({ activeSlide }: Props) {
   const [loading, setLoading] = useState<'pdf' | 'pptx' | 'image' | null>(null);
   const [exporting, setExporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatus>('checking');
+  const [browserError, setBrowserError] = useState<string | null>(null);
+
+  // Preflight check: verify Chromium is available before enabling the PPTX button
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/export-pptx', { method: 'GET' });
+        const body = await res.json();
+        if (cancelled) return;
+        if (body.ok) {
+          setBrowserStatus('available');
+        } else {
+          setBrowserStatus('unavailable');
+          setBrowserError(body.error ?? 'Chromium browser is not available on the server.');
+        }
+      } catch {
+        if (cancelled) return;
+        setBrowserStatus('unavailable');
+        setBrowserError('Cannot reach the export service.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const slides = useMemo(() => {
     const list: { id: string; node: React.ReactNode }[] = [];
@@ -173,6 +200,11 @@ export function ExportButtons({ activeSlide }: Props) {
 
   // ── Playwright-based PPTX export via server API ──────────────────────────
   const exportPPTX = async () => {
+    if (browserStatus !== 'available') {
+      setErrorMsg(browserError ?? 'Chromium browser is not available on the server.');
+      return;
+    }
+
     setLoading('pptx');
     setExporting(true);
     setErrorMsg(null);
@@ -189,10 +221,16 @@ export function ExportButtons({ activeSlide }: Props) {
 
       if (!response.ok) {
         let msg = `Export failed (${response.status})`;
+        let isBrowserError = false;
         try {
           const body = await response.json();
           if (body.error) msg = body.error;
+          isBrowserError = body.browserError === true;
         } catch { /* ignore */ }
+        if (isBrowserError) {
+          setBrowserStatus('unavailable');
+          setBrowserError(msg);
+        }
         throw new Error(msg);
       }
 
@@ -233,7 +271,7 @@ export function ExportButtons({ activeSlide }: Props) {
   };
 
   const btnClass =
-    'flex items-center gap-1.5 px-3 py-1.5 rounded text-white text-xs font-semibold transition-opacity hover:opacity-90 disabled:opacity-50';
+    'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold transition-opacity hover:opacity-90 disabled:opacity-50';
 
   return (
     <>
@@ -260,16 +298,44 @@ export function ExportButtons({ activeSlide }: Props) {
           className={btnClass}
           style={{ backgroundColor: '#1a6b4a' }}
           onClick={exportPPTX}
-          disabled={loading !== null}
+          disabled={loading !== null || browserStatus === 'unavailable'}
+          title={
+            browserStatus === 'checking'
+              ? 'Checking browser availability…'
+              : browserStatus === 'unavailable'
+                ? browserError ?? 'Browser not available'
+                : 'Export to PowerPoint'
+          }
         >
-          {loading === 'pptx' ? <Loader2 size={14} className="animate-spin" /> : <Presentation size={14} />}
-          {loading === 'pptx' ? 'Generating…' : 'Export PPTX'}
+          {loading === 'pptx' ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : browserStatus === 'checking' ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : browserStatus === 'available' ? (
+            <Presentation size={14} />
+          ) : (
+            <AlertCircle size={14} />
+          )}
+          {loading === 'pptx'
+            ? 'Generating…'
+            : browserStatus === 'checking'
+              ? 'Checking…'
+              : browserStatus === 'unavailable'
+                ? 'Unavailable'
+                : 'Export PPTX'}
         </button>
       </div>
 
+      {/* Status / error messages */}
+      {browserStatus === 'available' && !errorMsg && (
+        <div className="flex items-center gap-1.5 text-green-300 text-xs ml-2">
+          <CheckCircle2 size={12} />
+          <span>Export ready</span>
+        </div>
+      )}
       {errorMsg && (
-        <div className="flex items-center gap-1.5 text-amber-200 text-xs ml-2">
-          <AlertCircle size={12} />
+        <div className="flex items-center gap-1.5 text-amber-200 text-xs ml-2 max-w-md">
+          <AlertCircle size={12} className="shrink-0" />
           <span>{errorMsg}</span>
         </div>
       )}

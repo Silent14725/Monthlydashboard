@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { handleExportRequest } from '../../api/export-pptx-core';
+import { handleExportRequest, checkBrowser, BrowserLaunchError } from '../../api/export-pptx-core';
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -16,17 +16,29 @@ async function readBody(req: IncomingMessage): Promise<string> {
 }
 
 /**
- * Vite plugin that adds a middleware handler for POST /api/export-pptx
- * during local development. The handler uses Playwright + PptxGenJS to
- * capture each dashboard slide and return a downloadable PPTX.
+ * Vite plugin that adds middleware handlers for /api/export-pptx
+ * during local development:
+ *
+ *   GET  /api/export-pptx        → preflight browser check (returns { ok, error? })
+ *   POST /api/export-pptx        → capture slides, return PPTX buffer
  */
 export function exportPptxDevPlugin(): Plugin {
   return {
     name: 'export-pptx-dev',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        if (req.url !== '/api/export-pptx' || req.method !== 'POST') {
+        if (req.url !== '/api/export-pptx') {
           return next();
+        }
+
+        // Preflight check
+        if (req.method === 'GET') {
+          const result = await checkBrowser();
+          return sendJson(res, result.ok ? 200 : 503, result);
+        }
+
+        if (req.method !== 'POST') {
+          return sendJson(res, 405, { error: 'Method not allowed' });
         }
 
         try {
@@ -42,7 +54,11 @@ export function exportPptxDevPlugin(): Plugin {
           res.end(result.buffer);
         } catch (e: any) {
           console.error('[export-pptx-dev] Error:', e);
-          sendJson(res, 500, { error: e?.message ?? 'Internal server error' });
+          const isBrowserError = e instanceof BrowserLaunchError;
+          sendJson(res, 503, {
+            error: e?.message ?? 'Internal server error',
+            browserError: isBrowserError,
+          });
         }
       });
     },
