@@ -1,6 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import html2canvas from 'html2canvas';
-import pptxgen from 'pptxgenjs';
 import { FileImage, Presentation, FileText, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { CoverPage } from '../../pages/CoverPage';
@@ -14,10 +13,6 @@ import { ThankYouPage } from '../../pages/ThankYouPage';
 const DESIGN_W = 1280;
 const DESIGN_H = 720;
 const CAPTURE_SCALE = 1.25; // 1280×1.25=1600, 720×1.25=900
-
-// PowerPoint widescreen slide dimensions (inches)
-const PPTX_W = 13.333;
-const PPTX_H = 7.5;
 
 async function waitForRenderReady(): Promise<void> {
   if (document.fonts?.ready) {
@@ -101,7 +96,7 @@ export function ExportButtons({ activeSlide }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/export-pptx', { method: 'GET' });
+        const res = await fetch('/api/export-pptx', { method: 'GET', cache: 'no-store' });
         const body = await res.json();
         if (cancelled) return;
         if (body.ok) {
@@ -208,6 +203,7 @@ export function ExportButtons({ activeSlide }: Props) {
     setLoading('pptx');
     setExporting(true);
     setErrorMsg(null);
+    let isBrowserError = false;
     try {
       const slideIds = slides.map((s) => s.id);
       const response = await fetch('/api/export-pptx', {
@@ -221,7 +217,6 @@ export function ExportButtons({ activeSlide }: Props) {
 
       if (!response.ok) {
         let msg = `Export failed (${response.status})`;
-        let isBrowserError = false;
         try {
           const body = await response.json();
           if (body.error) msg = body.error;
@@ -244,30 +239,17 @@ export function ExportButtons({ activeSlide }: Props) {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      console.error('Playwright PPTX export failed, falling back to client-side', e);
-      setErrorMsg(e?.message ?? 'PPTX export failed. Trying fallback...');
-      await exportPPTXFallback();
+      console.error('Playwright PPTX export failed', e);
+      const msg = e?.message ?? 'PPTX export failed.';
+      setErrorMsg(msg);
+      if (isBrowserError) {
+        setBrowserStatus('unavailable');
+        setBrowserError(msg);
+      }
     } finally {
       setExporting(false);
       setLoading(null);
     }
-  };
-
-  // Legacy client-side PPTX export (html2canvas) — kept as fallback
-  const exportPPTXFallback = async () => {
-    const ids = slides.map((s) => s.id);
-    await waitForExportDom(ids[0]);
-    await waitForRenderReady();
-    const results = await captureById(ids);
-    const pptx = new pptxgen();
-    pptx.layout = 'LAYOUT_WIDE';
-    for (const id of ids) {
-      const dataUrl = results.get(id);
-      if (!dataUrl) continue;
-      const slide = pptx.addSlide();
-      slide.addImage({ data: dataUrl, x: 0, y: 0, w: PPTX_W, h: PPTX_H });
-    }
-    await pptx.writeFile({ fileName: 'TSS-Maintenance-Monthly-Meeting.pptx' });
   };
 
   const btnClass =

@@ -8,6 +8,7 @@ export const handler = async (event: any): Promise<any> => {
     const result = await checkBrowser();
     return {
       statusCode: result.ok ? 200 : 503,
+      headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
       body: JSON.stringify(result),
     };
   }
@@ -15,8 +16,8 @@ export const handler = async (event: any): Promise<any> => {
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
-      body: JSON.stringify({ error: 'Method not allowed' }),
       headers: { Allow: 'POST, GET' },
+      body: JSON.stringify({ error: 'Method not allowed' }),
     };
   }
 
@@ -38,7 +39,9 @@ export const handler = async (event: any): Promise<any> => {
     console.error('[export-pptx] Error:', e);
     return {
       statusCode: 503,
+      headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        ok: false,
         error: e?.message ?? 'Internal server error',
         browserError: e?.name === 'BrowserLaunchError',
       }),

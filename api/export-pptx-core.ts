@@ -14,6 +14,13 @@ export interface ExportResult {
   filename: string;
 }
 
+export interface BrowserCheckResult {
+  ok: boolean;
+  executablePath?: string;
+  source?: 'playwright' | 'system';
+  error?: string;
+}
+
 const VIEWPORT_W = 1600;
 const VIEWPORT_H = 900;
 const PPTX_W = 13.333;
@@ -22,11 +29,15 @@ const PPTX_H = 7.5;
 const SCREENSHOT_TIMEOUT = 30000;
 const READY_TIMEOUT = 30000;
 
-/**
- * Error thrown when the browser cannot be launched. The client checks for
- * this class (via the `browserError` property in the JSON response) to show
- * a targeted message rather than the raw Playwright stack trace.
- */
+const SYSTEM_CHROMIUM_PATHS = [
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+];
+
+// ── Error classification ───────────────────────────────────────────────────
+
 export class BrowserLaunchError extends Error {
   constructor(message: string) {
     super(message);
@@ -34,55 +45,60 @@ export class BrowserLaunchError extends Error {
   }
 }
 
-function isBrowserMissingError(e: any): boolean {
+function classifyLaunchError(e: any): string {
   const msg = (e?.message ?? '').toLowerCase();
-  return (
-    msg.includes('looks like playwright was just installed') ||
-    msg.includes('executable doesn\'t exist') ||
-    msg.includes('executable does not exist') ||
-    msg.includes('browser was not found') ||
-    msg.includes('playwright install')
-  );
-}
 
-function cleanBrowserError(e: any): string {
-  if (isBrowserMissingError(e)) {
+  if (msg.includes('looks like playwright was just installed') || msg.includes('playwright install')) {
     return 'Chromium browser is not installed. Run "npx playwright install chromium" on the server, then restart.';
+  }
+  if (msg.includes("executable doesn't exist") || msg.includes('executable does not exist') || msg.includes('enoent')) {
+    return 'Chromium executable is missing. Run "npx playwright install chromium" or install a system Chromium.';
+  }
+  if (msg.includes('eacces') || msg.includes('permission denied')) {
+    return 'Permission denied when launching Chromium. Check that the executable is readable and executable.';
+  }
+  if (msg.includes('missing') && (msg.includes('library') || msg.includes('shared object') || msg.includes('.so'))) {
+    return `Missing Linux library required by Chromium: ${e?.message ?? 'unknown'}. Install system dependencies with "npx playwright install-deps chromium".`;
+  }
+  if (msg.includes('timeout') || msg.includes('timed out')) {
+    return 'Browser launch timed out. The server may be under heavy load.';
+  }
+  if (msg.includes('target closed') || msg.includes('browser closed') || msg.includes('disconnected')) {
+    return 'Browser closed unexpectedly during launch. Check available memory and system resources.';
   }
   return `Failed to launch browser: ${e?.message ?? 'Unknown error'}`;
 }
 
+// ── Path resolution ─────────────────────────────────────────────────────────
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    const fs = await import('fs');
+    return fs.existsSync(path);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Launch a browser. In local dev, Playwright's bundled Chromium is used.
- * In production, set BROWSER_WS_ENDPOINT to connect to a remote Chromium
- * (e.g. Browserless, Chrome for Testing on a VM, etc.).
+ * Resolve the Chromium executable path using the ordered fallback chain:
+ *   a. PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH env var
+ *   b. Playwright's bundled chromium executable
+ *   c. /usr/bin/chromium
+ *   d. /usr/bin/chromium-browser
+ *   e. /usr/bin/google-chrome
+ *   f. /usr/bin/google-chrome-stable
  *
- * If the bundled Chromium is not installed (common in CI/sandbox), falls
- * back to a system Chromium at /usr/bin/chromium.
+ * Returns { path, source } or null if no executable was found.
  */
-export async function launchBrowser(): Promise<Browser> {
-  const { chromium } = await import('playwright');
-  const wsEndpoint = process.env.BROWSER_WS_ENDPOINT;
-  if (wsEndpoint) {
-    try {
-      return await chromium.connectOverCDP(wsEndpoint);
-    } catch (e: any) {
-      throw new BrowserLaunchError(`Cannot connect to remote browser at ${wsEndpoint}: ${e.message}`);
-    }
+async function resolveChromiumPath(): Promise<{ path: string; source: 'playwright' | 'system' } | null> {
+  // a. Environment variable
+  const envPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (envPath && await fileExists(envPath)) {
+    return { path: envPath, source: 'playwright' };
   }
 
-  const launchOptions: Parameters<typeof chromium.launch>[0] = {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--font-render-hinting=none',
-    ],
-  };
-
-  // Use Playwright-bundled Chromium if it exists
+  // b. Playwright's bundled chromium
   try {
     const fs = await import('fs');
     const localBrowserPath = `${process.cwd()}/node_modules/playwright-core/.local-browsers`;
@@ -92,47 +108,101 @@ export async function launchBrowser(): Promise<Browser> {
       if (chromiumDir) {
         const execPath = `${localBrowserPath}/${chromiumDir}/chrome-linux64/chrome`;
         if (fs.existsSync(execPath)) {
-          launchOptions.executablePath = execPath;
+          return { path: execPath, source: 'playwright' };
         }
       }
     }
-  } catch { /* ignore — fall through to system chromium */ }
+  } catch { /* ignore */ }
 
-  // Fallback to system Chromium if no bundled browser found
-  if (!launchOptions.executablePath) {
-    const fs = await import('fs');
-    for (const candidate of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome']) {
-      if (fs.existsSync(candidate)) {
-        launchOptions.executablePath = candidate;
-        break;
-      }
+  // c–f. System Chromium paths
+  for (const candidate of SYSTEM_CHROMIUM_PATHS) {
+    if (await fileExists(candidate)) {
+      return { path: candidate, source: 'system' };
     }
   }
 
+  return null;
+}
+
+// ── Browser launch ──────────────────────────────────────────────────────────
+
+/**
+ * Shared browser launch function used by checkBrowser(), handleExportRequest(),
+ * local dev, and Netlify. Tries executables in order and logs the selected path.
+ */
+export async function launchBrowser(): Promise<Browser> {
+  const { chromium } = await import('playwright');
+
+  // Remote Chromium via CDP (production)
+  const wsEndpoint = process.env.BROWSER_WS_ENDPOINT;
+  if (wsEndpoint) {
+    try {
+      console.log('[PPTX] Connecting to remote browser:', wsEndpoint);
+      return await chromium.connectOverCDP(wsEndpoint);
+    } catch (e: any) {
+      throw new BrowserLaunchError(`Cannot connect to remote browser at ${wsEndpoint}: ${e.message}`);
+    }
+  }
+
+  const resolved = await resolveChromiumPath();
+  if (!resolved) {
+    throw new BrowserLaunchError(
+      'No Chromium executable found. Set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, run "npx playwright install chromium", or install a system Chromium.',
+    );
+  }
+
+  console.log('[PPTX] Chromium path:', resolved.path);
+
   try {
-    return await chromium.launch(launchOptions);
+    return await chromium.launch({
+      executablePath: resolved.path,
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+      ],
+    });
   } catch (e: any) {
-    throw new BrowserLaunchError(cleanBrowserError(e));
+    throw new BrowserLaunchError(classifyLaunchError(e));
   }
 }
 
+// ── Preflight check ─────────────────────────────────────────────────────────
+
 /**
  * Preflight check: launch a browser, open about:blank, close it.
- * Returns { ok: true } or { ok: false, error: string }.
- * Used by the client to decide whether to enable the Export PPTX button.
+ * Returns the executable path and source so the client can verify
+ * that the export will use the same binary.
  */
-export async function checkBrowser(): Promise<{ ok: boolean; error?: string }> {
+export async function checkBrowser(): Promise<BrowserCheckResult> {
+  let browser: Browser;
   try {
-    const browser = await launchBrowser();
+    browser = await launchBrowser();
+  } catch (e: any) {
+    return { ok: false, error: e instanceof BrowserLaunchError ? e.message : classifyLaunchError(e) };
+  }
+
+  try {
     const page = await browser.newPage();
     await page.goto('about:blank');
     await page.close();
     await browser.close();
-    return { ok: true };
   } catch (e: any) {
-    return { ok: false, error: e instanceof BrowserLaunchError ? e.message : cleanBrowserError(e) };
+    try { await browser.close(); } catch { /* ignore */ }
+    return { ok: false, error: classifyLaunchError(e) };
   }
+
+  // Report the path that was used
+  const resolved = await resolveChromiumPath();
+  return {
+    ok: true,
+    executablePath: resolved?.path,
+    source: resolved?.source,
+  };
 }
+
+// ── Slide capture ───────────────────────────────────────────────────────────
 
 /**
  * Capture a single slide as a PNG buffer.
@@ -189,6 +259,8 @@ export async function captureSlide(
     await context.close();
   }
 }
+
+// ── PPTX assembly ───────────────────────────────────────────────────────────
 
 /**
  * Capture all slides in order and build a PptxGenJS presentation.

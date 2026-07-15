@@ -2,8 +2,12 @@ import type { Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { handleExportRequest, checkBrowser, BrowserLaunchError } from '../../api/export-pptx-core';
 
-function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+function sendJson(res: ServerResponse, status: number, body: unknown, extraHeaders?: Record<string, string>) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    ...extraHeaders,
+  });
   res.end(JSON.stringify(body));
 }
 
@@ -19,7 +23,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
  * Vite plugin that adds middleware handlers for /api/export-pptx
  * during local development:
  *
- *   GET  /api/export-pptx        → preflight browser check (returns { ok, error? })
+ *   GET  /api/export-pptx        → preflight browser check (returns { ok, executablePath, source, error? })
  *   POST /api/export-pptx        → capture slides, return PPTX buffer
  */
 export function exportPptxDevPlugin(): Plugin {
@@ -38,7 +42,7 @@ export function exportPptxDevPlugin(): Plugin {
         }
 
         if (req.method !== 'POST') {
-          return sendJson(res, 405, { error: 'Method not allowed' });
+          return sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'POST, GET' });
         }
 
         try {
@@ -56,6 +60,7 @@ export function exportPptxDevPlugin(): Plugin {
           console.error('[export-pptx-dev] Error:', e);
           const isBrowserError = e instanceof BrowserLaunchError;
           sendJson(res, 503, {
+            ok: false,
             error: e?.message ?? 'Internal server error',
             browserError: isBrowserError,
           });
