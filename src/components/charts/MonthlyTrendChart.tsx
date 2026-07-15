@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { MonthlyTrendData } from '../../types/dashboard';
+import { readExportParams } from '../../lib/exportMode';
 
 interface Props {
   data: MonthlyTrendData[];
@@ -42,6 +43,7 @@ const renderLegend = (props: any) => {
 };
 
 export function MonthlyTrendChart({ data }: Props) {
+  const { isExportMode } = readExportParams();
   return (
     <div>
       <p style={{ fontSize: '9px', fontWeight: 600, color: '#333', marginBottom: '2px' }}>Monthly Trend</p>
@@ -63,13 +65,13 @@ export function MonthlyTrendChart({ data }: Props) {
             formatter={(val: number, name: string) => [`${val}%`, name]}
             contentStyle={{ fontSize: 9, padding: '2px 6px' }}
           />
-          <Bar dataKey="productivity" name="Productivity" fill={PRODUCTIVITY_COLOR} radius={[2, 2, 0, 0]}>
+          <Bar dataKey="productivity" name="Productivity" fill={PRODUCTIVITY_COLOR} radius={[2, 2, 0, 0]} isAnimationActive={!isExportMode}>
             <LabelList content={<CustomLabel />} />
           </Bar>
-          <Bar dataKey="efficiency" name="Efficiency" fill={EFFICIENCY_COLOR} radius={[2, 2, 0, 0]}>
+          <Bar dataKey="efficiency" name="Efficiency" fill={EFFICIENCY_COLOR} radius={[2, 2, 0, 0]} isAnimationActive={!isExportMode}>
             <LabelList content={<CustomLabel />} />
           </Bar>
-          <Bar dataKey="utilization" name="Utilization" fill={UTILIZATION_COLOR} radius={[2, 2, 0, 0]}>
+          <Bar dataKey="utilization" name="Utilization" fill={UTILIZATION_COLOR} radius={[2, 2, 0, 0]} isAnimationActive={!isExportMode}>
             <LabelList content={<CustomLabel />} />
           </Bar>
           <Legend content={renderLegend} />

@@ -24,5 +24,12 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
     },
+  },
+  {
+    files: ['api/**/*.ts', 'netlify/functions/**/*.ts', 'src/plugins/**/*.ts'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: { ...globals.node },
+    },
   }
 );

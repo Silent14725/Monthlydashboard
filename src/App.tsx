@@ -8,6 +8,7 @@ import { ThankYouPage } from './pages/ThankYouPage';
 import { DataManagementPage } from './pages/DataManagementPage';
 import { ExportButtons } from './components/export/ExportButtons';
 import { ChevronLeft, ChevronRight, Database, LayoutDashboard, ChevronsLeftRight, Loader2 } from 'lucide-react';
+import { useExportParams, EXPORT_SLIDE_W, EXPORT_SLIDE_H } from './lib/exportMode';
 
 // Base slide dimensions (16:9)
 const SLIDE_W = 1280;
@@ -30,6 +31,9 @@ function Dashboard() {
   // viewerRef kept only for export compatibility — scale now derived from window dimensions
   const viewerRef = useRef<HTMLDivElement>(null);
 
+  const exportParams = useExportParams();
+  const isExportMode = exportParams.isExportMode;
+
   const SLIDES = useMemo(() => [
     { id: 'slide-cover', label: 'Cover' },
     { id: 'slide-overall', label: 'Overall Summary' },
@@ -50,28 +54,38 @@ function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (isExportMode) return;
     updateScale();
     window.addEventListener('resize', updateScale);
     return () => window.removeEventListener('resize', updateScale);
-  }, [updateScale]);
+  }, [updateScale, isExportMode]);
 
   // Clamp slide index when locations change
   useEffect(() => {
     setCurrentSlide((s) => Math.min(s, SLIDES.length - 1));
   }, [SLIDES.length]);
 
-  // Auto-redirect to data management when no active dataset
+  // Auto-redirect to data management when no active dataset (skip in export mode)
   useEffect(() => {
+    if (isExportMode) return;
     if (!isLoading && isSampleData) {
       setAppView('data');
     }
-  }, [isLoading, isSampleData]);
+  }, [isLoading, isSampleData, isExportMode]);
+
+  // In export mode, jump to the requested slide
+  useEffect(() => {
+    if (!isExportMode || !exportParams.slideKey) return;
+    const idx = SLIDES.findIndex((s) => s.id === exportParams.slideKey);
+    if (idx >= 0) setCurrentSlide(idx);
+  }, [isExportMode, exportParams.slideKey, SLIDES]);
 
   const goNext = useCallback(() => setCurrentSlide((s) => Math.min(s + 1, SLIDES.length - 1)), [SLIDES.length]);
   const goPrev = useCallback(() => setCurrentSlide((s) => Math.max(s - 1, 0)), []);
 
-  // Keyboard navigation
+  // Keyboard navigation (skip in export mode)
   useEffect(() => {
+    if (isExportMode) return;
     const onKey = (e: KeyboardEvent) => {
       if (appView !== 'dashboard') return;
       if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
@@ -79,7 +93,7 @@ function Dashboard() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [appView, goNext, goPrev]);
+  }, [appView, goNext, goPrev, isExportMode]);
 
   const renderSlide = (idx: number) => {
     const slide = SLIDES[idx];
@@ -104,6 +118,11 @@ function Dashboard() {
         </div>
       </div>
     );
+  }
+
+  // ── Export mode: render only the requested slide at exactly 1600×900 ──
+  if (isExportMode) {
+    return <ExportSlideRenderer slideIndex={currentSlide} renderSlide={renderSlide} />;
   }
 
   if (appView === 'data') {
@@ -261,6 +280,78 @@ function Dashboard() {
           Next
           <ChevronRight size={14} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Export-mode renderer ─────────────────────────────────────────────────────
+// Renders a single slide at exactly 1600×900 with no chrome. Sets
+// data-export-slide="true" immediately and data-export-ready="true" only after
+// fonts, images, and two animation frames have settled.
+
+function ExportSlideRenderer({
+  slideIndex,
+  renderSlide,
+}: {
+  slideIndex: number;
+  renderSlide: (idx: number) => React.ReactNode;
+}) {
+  const [ready, setReady] = useState(false);
+  const slideRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setReady(false);
+
+    (async () => {
+      // Wait for fonts
+      if (document.fonts?.ready) {
+        try { await document.fonts.ready; } catch { /* ignore */ }
+      }
+      // Wait for images inside the slide
+      const root = slideRef.current;
+      if (root) {
+        const imgs = Array.from(root.querySelectorAll('img'));
+        await Promise.all(
+          imgs.map((img) =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise<void>((resolve) => {
+                  img.addEventListener('load', () => resolve(), { once: true });
+                  img.addEventListener('error', () => resolve(), { once: true });
+                })
+          )
+        );
+      }
+      // Two RAF cycles
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      if (!cancelled) setReady(true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [slideIndex]);
+
+  return (
+    <div
+      style={{
+        width: `${EXPORT_SLIDE_W}px`,
+        height: `${EXPORT_SLIDE_H}px`,
+        backgroundColor: '#ffffff',
+        overflow: 'hidden',
+        margin: 0,
+        padding: 0,
+      }}
+    >
+      <div
+        ref={slideRef}
+        data-export-slide="true"
+        data-export-ready={ready ? 'true' : 'false'}
+        style={{ width: '100%', height: '100%', overflow: 'hidden' }}
+      >
+        {renderSlide(slideIndex)}
       </div>
     </div>
   );

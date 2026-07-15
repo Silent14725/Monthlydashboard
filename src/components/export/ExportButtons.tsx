@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import html2canvas from 'html2canvas';
 import pptxgen from 'pptxgenjs';
-import { FileImage, Presentation, FileText } from 'lucide-react';
+import { FileImage, Presentation, FileText, Loader2, AlertCircle } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { CoverPage } from '../../pages/CoverPage';
 import { OverallSummaryPage } from '../../pages/OverallSummaryPage';
@@ -90,6 +90,7 @@ export function ExportButtons({ activeSlide }: Props) {
   const { data } = useData();
   const [loading, setLoading] = useState<'pdf' | 'pptx' | 'image' | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const slides = useMemo(() => {
     const list: { id: string; node: React.ReactNode }[] = [];
@@ -120,6 +121,7 @@ export function ExportButtons({ activeSlide }: Props) {
   const exportImage = async () => {
     setLoading('image');
     setExporting(true);
+    setErrorMsg(null);
     try {
       await waitForExportDom(activeSlide);
       await waitForRenderReady();
@@ -133,6 +135,7 @@ export function ExportButtons({ activeSlide }: Props) {
       }
     } catch (e) {
       console.error('Image export failed', e);
+      setErrorMsg('Image export failed.');
     } finally {
       setExporting(false);
       setLoading(null);
@@ -142,6 +145,7 @@ export function ExportButtons({ activeSlide }: Props) {
   const exportPDF = async () => {
     setLoading('pdf');
     setExporting(true);
+    setErrorMsg(null);
     try {
       const { jsPDF } = await import('jspdf');
       const ids = slides.map((s) => s.id);
@@ -160,35 +164,72 @@ export function ExportButtons({ activeSlide }: Props) {
       pdf.save('TSS-Maintenance-Monthly-Meeting.pdf');
     } catch (e) {
       console.error('PDF export failed', e);
+      setErrorMsg('PDF export failed.');
     } finally {
       setExporting(false);
       setLoading(null);
     }
   };
 
+  // ── Playwright-based PPTX export via server API ──────────────────────────
   const exportPPTX = async () => {
     setLoading('pptx');
     setExporting(true);
+    setErrorMsg(null);
     try {
-      const ids = slides.map((s) => s.id);
-      await waitForExportDom(ids[0]);
-      await waitForRenderReady();
-      const results = await captureById(ids);
-      const pptx = new pptxgen();
-      pptx.layout = 'LAYOUT_WIDE'; // 13.333 × 7.5 inches
-      for (const id of ids) {
-        const dataUrl = results.get(id);
-        if (!dataUrl) continue;
-        const slide = pptx.addSlide();
-        slide.addImage({ data: dataUrl, x: 0, y: 0, w: PPTX_W, h: PPTX_H });
+      const slideIds = slides.map((s) => s.id);
+      const response = await fetch('/api/export-pptx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: window.location.origin,
+          slides: slideIds,
+        }),
+      });
+
+      if (!response.ok) {
+        let msg = `Export failed (${response.status})`;
+        try {
+          const body = await response.json();
+          if (body.error) msg = body.error;
+        } catch { /* ignore */ }
+        throw new Error(msg);
       }
-      await pptx.writeFile({ fileName: 'TSS-Maintenance-Monthly-Meeting.pptx' });
-    } catch (e) {
-      console.error('PPTX export failed', e);
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'TSS-Maintenance-Monthly-Meeting.pptx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      console.error('Playwright PPTX export failed, falling back to client-side', e);
+      setErrorMsg(e?.message ?? 'PPTX export failed. Trying fallback...');
+      await exportPPTXFallback();
     } finally {
       setExporting(false);
       setLoading(null);
     }
+  };
+
+  // Legacy client-side PPTX export (html2canvas) — kept as fallback
+  const exportPPTXFallback = async () => {
+    const ids = slides.map((s) => s.id);
+    await waitForExportDom(ids[0]);
+    await waitForRenderReady();
+    const results = await captureById(ids);
+    const pptx = new pptxgen();
+    pptx.layout = 'LAYOUT_WIDE';
+    for (const id of ids) {
+      const dataUrl = results.get(id);
+      if (!dataUrl) continue;
+      const slide = pptx.addSlide();
+      slide.addImage({ data: dataUrl, x: 0, y: 0, w: PPTX_W, h: PPTX_H });
+    }
+    await pptx.writeFile({ fileName: 'TSS-Maintenance-Monthly-Meeting.pptx' });
   };
 
   const btnClass =
@@ -221,10 +262,17 @@ export function ExportButtons({ activeSlide }: Props) {
           onClick={exportPPTX}
           disabled={loading !== null}
         >
-          <Presentation size={14} />
+          {loading === 'pptx' ? <Loader2 size={14} className="animate-spin" /> : <Presentation size={14} />}
           {loading === 'pptx' ? 'Generating…' : 'Export PPTX'}
         </button>
       </div>
+
+      {errorMsg && (
+        <div className="flex items-center gap-1.5 text-amber-200 text-xs ml-2">
+          <AlertCircle size={12} />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {/* Off-screen export root: all slides at fixed 1280×720, no transforms.
           Only mounted during export so normal dashboard layout is unaffected. */}
