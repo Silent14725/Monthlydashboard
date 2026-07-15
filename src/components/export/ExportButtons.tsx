@@ -203,7 +203,6 @@ export function ExportButtons({ activeSlide }: Props) {
     setLoading('pptx');
     setExporting(true);
     setErrorMsg(null);
-    let isBrowserError = false;
     try {
       const slideIds = slides.map((s) => s.id);
       const response = await fetch('/api/export-pptx', {
@@ -220,12 +219,16 @@ export function ExportButtons({ activeSlide }: Props) {
         try {
           const body = await response.json();
           if (body.error) msg = body.error;
-          isBrowserError = body.browserError === true;
         } catch { /* ignore */ }
-        if (isBrowserError) {
-          setBrowserStatus('unavailable');
-          setBrowserError(msg);
-        }
+        // Re-check browser availability so the button reflects the current state
+        try {
+          const recheck = await fetch('/api/export-pptx', { method: 'GET', cache: 'no-store' });
+          const recheckBody = await recheck.json();
+          if (!recheckBody.ok) {
+            setBrowserStatus('unavailable');
+            setBrowserError(recheckBody.error ?? msg);
+          }
+        } catch { /* ignore */ }
         throw new Error(msg);
       }
 
@@ -240,12 +243,7 @@ export function ExportButtons({ activeSlide }: Props) {
       URL.revokeObjectURL(url);
     } catch (e: any) {
       console.error('Playwright PPTX export failed', e);
-      const msg = e?.message ?? 'PPTX export failed.';
-      setErrorMsg(msg);
-      if (isBrowserError) {
-        setBrowserStatus('unavailable');
-        setBrowserError(msg);
-      }
+      setErrorMsg(e?.message ?? 'PPTX export failed.');
     } finally {
       setExporting(false);
       setLoading(null);

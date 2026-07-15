@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { handleExportRequest, checkBrowser, BrowserLaunchError } from '../../api/export-pptx-core';
+import { handleExportRequest, checkBrowser } from '../../api/export-pptx-core';
 
 function sendJson(res: ServerResponse, status: number, body: unknown, extraHeaders?: Record<string, string>) {
   res.writeHead(status, {
@@ -58,11 +58,9 @@ export function exportPptxDevPlugin(): Plugin {
           res.end(result.buffer);
         } catch (e: any) {
           console.error('[export-pptx-dev] Error:', e);
-          const isBrowserError = e instanceof BrowserLaunchError;
           sendJson(res, 503, {
             ok: false,
             error: e?.message ?? 'Internal server error',
-            browserError: isBrowserError,
           });
         }
       });

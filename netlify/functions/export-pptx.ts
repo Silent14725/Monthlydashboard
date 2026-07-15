@@ -43,7 +43,6 @@ export const handler = async (event: any): Promise<any> => {
       body: JSON.stringify({
         ok: false,
         error: e?.message ?? 'Internal server error',
-        browserError: e?.name === 'BrowserLaunchError',
       }),
     };
   }
